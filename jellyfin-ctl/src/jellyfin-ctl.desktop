@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Jellyfin 控制
+Exec=/usr/local/bin/jellyfin-ctl
+Icon=jellyfin-ctl
+Terminal=false
+Categories=Utility;
