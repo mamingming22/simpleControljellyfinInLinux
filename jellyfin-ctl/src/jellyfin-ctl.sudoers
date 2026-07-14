@@ -1,1 +1,1 @@
-%wheel ALL=(ALL) NOPASSWD: /usr/bin/systemctl start jellyfin, /usr/bin/systemctl stop jellyfin, /usr/bin/systemctl restart jellyfin
+%sudo ALL=(ALL) NOPASSWD: /usr/bin/systemctl start jellyfin, /usr/bin/systemctl stop jellyfin, /usr/bin/systemctl restart jellyfin
