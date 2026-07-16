@@ -17,6 +17,10 @@
 #define SUDO       "sudo"
 #define DEF_PORT   "8096"
 
+static gboolean is_zh = TRUE;
+
+#define _(zh, en) (is_zh ? (zh) : (en))
+
 typedef enum { MODE_SYSTEMD, MODE_FLATPAK, MODE_SNAP } ModeType;
 
 typedef struct {
@@ -31,6 +35,10 @@ typedef struct {
 	GtkWidget     *tray_start;
 	GtkWidget     *tray_stop;
 	GtkWidget     *tray_restart;
+	GtkWidget     *tray_show;
+	GtkWidget     *tray_browser;
+	GtkWidget     *tray_quit_and_stop;
+	GtkWidget     *tray_quit;
 	guint          timer;
 	ModeType       mode_type;
 	gchar         *mode_id;
@@ -42,6 +50,12 @@ typedef struct {
 	GtkWidget     *mode_combo;
 	GtkWidget     *vbox;
 	GtkWidget     *top_section;
+	GtkWidget     *lang_btn;
+	GtkWidget     *lang_label;
+	GtkWidget     *port_label;
+	GtkWidget     *btn_quit_and_stop;
+	GtkWidget     *btn_quit;
+	GtkWidget     *btn_browser;
 } App;
 
 static App *app = NULL;
@@ -149,7 +163,7 @@ static void detect(void) {
 
 static gboolean update_label(void) {
 	if (app->mode_type == MODE_SYSTEMD && !app->native_found) {
-		gtk_label_set_text(GTK_LABEL(app->status_label), "未安装 Jellyfin");
+		gtk_label_set_text(GTK_LABEL(app->status_label), _("未安装 Jellyfin", "Jellyfin not installed"));
 		disable_all_buttons();
 		return FALSE;
 	}
@@ -196,7 +210,7 @@ static gboolean update_label(void) {
 	}
 
 	gtk_label_set_text(GTK_LABEL(app->status_label),
-	                   running ? "● 运行中" : "○ 已停止");
+	                   running ? _("● 运行中", "● Running") : _("○ 已停止", "○ Stopped"));
 	set_buttons_running(running);
 	return FALSE;
 }
@@ -291,6 +305,21 @@ static void on_quit(void) {
 	gtk_main_quit();
 }
 
+static void on_quit_and_stop(void) {
+	switch (app->mode_type) {
+	case MODE_SYSTEMD:
+		run_cmd(SUDO " " SYSTEMCTL " stop " SERVICE);
+		break;
+	case MODE_FLATPAK:
+		run_cmd("flatpak kill %s", app->mode_id);
+		break;
+	case MODE_SNAP:
+		run_cmd(SUDO " snap stop %s", app->mode_id);
+		break;
+	}
+	gtk_main_quit();
+}
+
 static void on_browser(void) {
 	const gchar *p = gtk_entry_get_text(GTK_ENTRY(app->port_entry));
 	if (p == NULL || *p == '\0') p = DEF_PORT;
@@ -324,8 +353,41 @@ static int count_installed(void) {
 	return n;
 }
 
+static void do_refresh(gboolean redetect);
+
 static void on_refresh(void) {
-	detect();
+	do_refresh(TRUE);
+}
+
+static void on_lang_changed(void) {
+	is_zh = !is_zh;
+	gtk_button_set_label(GTK_BUTTON(app->lang_btn), is_zh ? "English" : "中文");
+	gtk_window_set_title(GTK_WINDOW(app->window), _("Jellyfin 控制", "Jellyfin Control"));
+	app_indicator_set_title(app->indicator, _("Jellyfin 控制", "Jellyfin Control"));
+
+	gtk_button_set_label(GTK_BUTTON(app->btn_start), _("启动", "Start"));
+	gtk_button_set_label(GTK_BUTTON(app->btn_stop), _("停止", "Stop"));
+	gtk_button_set_label(GTK_BUTTON(app->btn_restart), _("重启", "Restart"));
+	gtk_button_set_label(GTK_BUTTON(app->btn_quit_and_stop), _("退出并停止服务", "Quit & Stop Service"));
+	gtk_button_set_label(GTK_BUTTON(app->btn_quit), _("仅退出", "Quit Only"));
+	gtk_button_set_label(GTK_BUTTON(app->btn_browser), _("打开浏览器", "Open Browser"));
+
+	gtk_label_set_label(GTK_LABEL(app->port_label), _("端口:", "Port:"));
+	gtk_label_set_label(GTK_LABEL(app->lang_label), _("语言：", "Language:"));
+
+	gtk_menu_item_set_label(GTK_MENU_ITEM(app->tray_show), _("显示", "Show"));
+	gtk_menu_item_set_label(GTK_MENU_ITEM(app->tray_start), _("启动", "Start"));
+	gtk_menu_item_set_label(GTK_MENU_ITEM(app->tray_stop), _("停止", "Stop"));
+	gtk_menu_item_set_label(GTK_MENU_ITEM(app->tray_restart), _("重启", "Restart"));
+	gtk_menu_item_set_label(GTK_MENU_ITEM(app->tray_browser), _("打开浏览器", "Open Browser"));
+	gtk_menu_item_set_label(GTK_MENU_ITEM(app->tray_quit_and_stop), _("退出并停止服务", "Quit & Stop Service"));
+	gtk_menu_item_set_label(GTK_MENU_ITEM(app->tray_quit), _("仅退出", "Quit Only"));
+
+	do_refresh(FALSE);
+}
+
+static void do_refresh(gboolean redetect) {
+	if (redetect) detect();
 	gboolean installed = (count_installed() > 0);
 
 	if (app->top_section) {
@@ -343,12 +405,12 @@ static void on_refresh(void) {
 			GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
 			gtk_box_pack_start(GTK_BOX(app->top_section), hbox, FALSE, FALSE, 0);
 			gtk_box_pack_start(GTK_BOX(hbox),
-			                   gtk_label_new("版本:"), FALSE, FALSE, 0);
+			                   gtk_label_new(_("版本:", "Version:")), FALSE, FALSE, 0);
 
 			app->mode_combo = gtk_combo_box_text_new();
 			if (app->native_found)
 				gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(app->mode_combo),
-				                          NULL, "系统安装 (systemd)");
+				                          NULL, _("系统安装 (systemd)", "System (systemd)"));
 			if (app->flatpak_found) {
 				gchar *lbl = g_strdup_printf("Flatpak (%s)", app->flatpak_id);
 				gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(app->mode_combo),
@@ -368,32 +430,32 @@ static void on_refresh(void) {
 		} else {
 			gchar *mode_label;
 			if (app->native_found)
-				mode_label = g_strdup("版本: 系统安装 (systemd)");
+				mode_label = g_strdup(_("版本: 系统安装 (systemd)", "Version: System (systemd)"));
 			else if (app->flatpak_found)
-				mode_label = g_strdup_printf("版本: Flatpak (%s)", app->flatpak_id);
+				mode_label = g_strdup_printf(_("版本: Flatpak (%s)", "Version: Flatpak (%s)"), app->flatpak_id);
 			else
-				mode_label = g_strdup_printf("版本: Snap (%s)", app->snap_id);
+				mode_label = g_strdup_printf(_("版本: Snap (%s)", "Version: Snap (%s)"), app->snap_id);
 			GtkWidget *mlabel = gtk_label_new(mode_label);
 			gtk_box_pack_start(GTK_BOX(app->top_section), mlabel, FALSE, FALSE, 0);
 			g_free(mode_label);
 		}
 
-		app->status_label = gtk_label_new("检查中...");
-		gtk_label_set_markup(GTK_LABEL(app->status_label), "<big>检查中...</big>");
+		app->status_label = gtk_label_new(_("检查中...", "Checking..."));
+		gtk_label_set_markup(GTK_LABEL(app->status_label), _("<big>检查中...</big>", "<big>Checking...</big>"));
 		gtk_box_pack_start(GTK_BOX(app->top_section), app->status_label, FALSE, FALSE, 0);
 
 		disable_all_buttons();
-		app->timer = g_timeout_add_seconds(3, timer_cb, NULL);
+		app->timer = g_timeout_add_seconds(5, timer_cb, NULL);
 		g_idle_add(idle_update, NULL);
 	} else {
 		GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
 		gtk_box_pack_start(GTK_BOX(app->top_section), hbox, FALSE, FALSE, 0);
 
-		app->status_label = gtk_label_new("未检测到 Jellyfin");
-		gtk_label_set_markup(GTK_LABEL(app->status_label), "<big>未检测到 Jellyfin</big>");
+		app->status_label = gtk_label_new(NULL);
+		gtk_label_set_markup(GTK_LABEL(app->status_label), _("<big>未检测到 Jellyfin</big>", "<big>Jellyfin not detected</big>"));
 		gtk_box_pack_start(GTK_BOX(hbox), app->status_label, FALSE, FALSE, 0);
 
-		GtkWidget *refresh_btn = gtk_button_new_with_label("刷新");
+		GtkWidget *refresh_btn = gtk_button_new_with_label(_("刷新", "Refresh"));
 		g_signal_connect(refresh_btn, "clicked", G_CALLBACK(on_refresh), NULL);
 		gtk_box_pack_start(GTK_BOX(hbox), refresh_btn, FALSE, FALSE, 0);
 	}
@@ -409,6 +471,7 @@ static void build_ui(void) {
 	gboolean installed = (count_installed() > 0);
 
 	app->window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+	gtk_window_set_title(GTK_WINDOW(app->window), _("Jellyfin 控制", "Jellyfin Control"));
 	gtk_window_set_default_size(GTK_WINDOW(app->window), 340, -1);
 	gtk_container_set_border_width(GTK_CONTAINER(app->window), 16);
 	g_signal_connect(app->window, "delete-event", G_CALLBACK(on_delete), NULL);
@@ -424,12 +487,12 @@ static void build_ui(void) {
 			GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
 			gtk_box_pack_start(GTK_BOX(app->top_section), hbox, FALSE, FALSE, 0);
 			gtk_box_pack_start(GTK_BOX(hbox),
-			                   gtk_label_new("版本:"), FALSE, FALSE, 0);
+			                   gtk_label_new(_("版本:", "Version:")), FALSE, FALSE, 0);
 
 			app->mode_combo = gtk_combo_box_text_new();
 			if (app->native_found)
 				gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(app->mode_combo),
-				                          NULL, "系统安装 (systemd)");
+				                          NULL, _("系统安装 (systemd)", "System (systemd)"));
 			if (app->flatpak_found) {
 				gchar *lbl = g_strdup_printf("Flatpak (%s)", app->flatpak_id);
 				gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(app->mode_combo),
@@ -449,28 +512,28 @@ static void build_ui(void) {
 		} else {
 			gchar *mode_label;
 			if (app->native_found)
-				mode_label = g_strdup("版本: 系统安装 (systemd)");
+				mode_label = g_strdup(_("版本: 系统安装 (systemd)", "Version: System (systemd)"));
 			else if (app->flatpak_found)
-				mode_label = g_strdup_printf("版本: Flatpak (%s)", app->flatpak_id);
+				mode_label = g_strdup_printf(_("版本: Flatpak (%s)", "Version: Flatpak (%s)"), app->flatpak_id);
 			else
-				mode_label = g_strdup_printf("版本: Snap (%s)", app->snap_id);
+				mode_label = g_strdup_printf(_("版本: Snap (%s)", "Version: Snap (%s)"), app->snap_id);
 			GtkWidget *mlabel = gtk_label_new(mode_label);
 			gtk_box_pack_start(GTK_BOX(app->top_section), mlabel, FALSE, FALSE, 0);
 			g_free(mode_label);
 		}
 
-		app->status_label = gtk_label_new("检查中...");
-		gtk_label_set_markup(GTK_LABEL(app->status_label), "<big>检查中...</big>");
+		app->status_label = gtk_label_new(_("检查中...", "Checking..."));
+		gtk_label_set_markup(GTK_LABEL(app->status_label), _("<big>检查中...</big>", "<big>Checking...</big>"));
 		gtk_box_pack_start(GTK_BOX(app->top_section), app->status_label, FALSE, FALSE, 0);
 	} else {
 		GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
 		gtk_box_pack_start(GTK_BOX(app->top_section), hbox, FALSE, FALSE, 0);
 
-		app->status_label = gtk_label_new("未检测到 Jellyfin");
-		gtk_label_set_markup(GTK_LABEL(app->status_label), "<big>未检测到 Jellyfin</big>");
+		app->status_label = gtk_label_new(NULL);
+		gtk_label_set_markup(GTK_LABEL(app->status_label), _("<big>未检测到 Jellyfin</big>", "<big>Jellyfin not detected</big>"));
 		gtk_box_pack_start(GTK_BOX(hbox), app->status_label, FALSE, FALSE, 0);
 
-		GtkWidget *refresh_btn = gtk_button_new_with_label("刷新");
+		GtkWidget *refresh_btn = gtk_button_new_with_label(_("刷新", "Refresh"));
 		g_signal_connect(refresh_btn, "clicked", G_CALLBACK(on_refresh), NULL);
 		gtk_box_pack_start(GTK_BOX(hbox), refresh_btn, FALSE, FALSE, 0);
 	}
@@ -480,24 +543,25 @@ static void build_ui(void) {
 	GtkWidget *hbtn = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
 	gtk_box_pack_start(GTK_BOX(app->vbox), hbtn, FALSE, FALSE, 0);
 
-	app->btn_start = make_button("启动", G_CALLBACK(on_start));
+	app->btn_start = make_button(_("启动", "Start"), G_CALLBACK(on_start));
 	gtk_box_pack_start(GTK_BOX(hbtn), app->btn_start, FALSE, FALSE, 0);
-	app->btn_stop = make_button("停止", G_CALLBACK(on_stop));
+	app->btn_stop = make_button(_("停止", "Stop"), G_CALLBACK(on_stop));
 	gtk_box_pack_start(GTK_BOX(hbtn), app->btn_stop, FALSE, FALSE, 0);
-	app->btn_restart = make_button("重启", G_CALLBACK(on_restart));
+	app->btn_restart = make_button(_("重启", "Restart"), G_CALLBACK(on_restart));
 	gtk_box_pack_start(GTK_BOX(hbtn), app->btn_restart, FALSE, FALSE, 0);
 
 	GtkWidget *hquit = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
 	gtk_box_pack_start(GTK_BOX(app->vbox), hquit, FALSE, FALSE, 0);
-	gtk_box_pack_start(GTK_BOX(hquit),
-	                   make_button("退出", G_CALLBACK(on_quit)),
-	                   FALSE, FALSE, 0);
+	app->btn_quit_and_stop = make_button(_("退出并停止服务", "Quit & Stop Service"), G_CALLBACK(on_quit_and_stop));
+	gtk_box_pack_start(GTK_BOX(hquit), app->btn_quit_and_stop, FALSE, FALSE, 0);
+	app->btn_quit = make_button(_("仅退出", "Quit Only"), G_CALLBACK(on_quit));
+	gtk_box_pack_start(GTK_BOX(hquit), app->btn_quit, FALSE, FALSE, 0);
 
 	GtkWidget *hport = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
 	gtk_box_pack_start(GTK_BOX(app->vbox), hport, FALSE, FALSE, 0);
 
-	GtkWidget *port_label = gtk_label_new("端口:");
-	gtk_box_pack_start(GTK_BOX(hport), port_label, FALSE, FALSE, 0);
+	app->port_label = gtk_label_new(_("端口:", "Port:"));
+	gtk_box_pack_start(GTK_BOX(hport), app->port_label, FALSE, FALSE, 0);
 
 	app->port_entry = gtk_entry_new();
 	gtk_entry_set_text(GTK_ENTRY(app->port_entry), DEF_PORT);
@@ -505,38 +569,48 @@ static void build_ui(void) {
 	gtk_entry_set_width_chars(GTK_ENTRY(app->port_entry), 6);
 	gtk_box_pack_start(GTK_BOX(hport), app->port_entry, FALSE, FALSE, 0);
 
-	gtk_box_pack_start(GTK_BOX(hport),
-	                   make_button("打开浏览器", G_CALLBACK(on_browser)),
-	                   FALSE, FALSE, 0);
+	app->btn_browser = make_button(_("打开浏览器", "Open Browser"), G_CALLBACK(on_browser));
+	gtk_box_pack_start(GTK_BOX(hport), app->btn_browser, FALSE, FALSE, 0);
+
+	GtkWidget *hlang = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
+	gtk_box_pack_start(GTK_BOX(app->vbox), hlang, FALSE, FALSE, 0);
+	app->lang_label = gtk_label_new(_("语言：", "Language:"));
+	gtk_box_pack_start(GTK_BOX(hlang), app->lang_label, FALSE, FALSE, 0);
+	app->lang_btn = gtk_button_new_with_label("English");
+	g_signal_connect(app->lang_btn, "clicked", G_CALLBACK(on_lang_changed), NULL);
+	gtk_box_pack_start(GTK_BOX(hlang), app->lang_btn, FALSE, FALSE, 0);
 
 	/* tray menu */
 	app->tray_menu = gtk_menu_new();
-	GtkWidget *item;
 
-	item = gtk_menu_item_new_with_label("显示");
-	g_signal_connect(item, "activate", G_CALLBACK(show_window), NULL);
-	gtk_menu_shell_append(GTK_MENU_SHELL(app->tray_menu), item);
+	app->tray_show = gtk_menu_item_new_with_label(_("显示", "Show"));
+	g_signal_connect(app->tray_show, "activate", G_CALLBACK(show_window), NULL);
+	gtk_menu_shell_append(GTK_MENU_SHELL(app->tray_menu), app->tray_show);
 	gtk_menu_shell_append(GTK_MENU_SHELL(app->tray_menu), gtk_separator_menu_item_new());
 
-	app->tray_start = gtk_menu_item_new_with_label("启动");
+	app->tray_start = gtk_menu_item_new_with_label(_("启动", "Start"));
 	g_signal_connect(app->tray_start, "activate", G_CALLBACK(on_start), NULL);
 	gtk_menu_shell_append(GTK_MENU_SHELL(app->tray_menu), app->tray_start);
-	app->tray_stop = gtk_menu_item_new_with_label("停止");
+	app->tray_stop = gtk_menu_item_new_with_label(_("停止", "Stop"));
 	g_signal_connect(app->tray_stop, "activate", G_CALLBACK(on_stop), NULL);
 	gtk_menu_shell_append(GTK_MENU_SHELL(app->tray_menu), app->tray_stop);
-	app->tray_restart = gtk_menu_item_new_with_label("重启");
+	app->tray_restart = gtk_menu_item_new_with_label(_("重启", "Restart"));
 	g_signal_connect(app->tray_restart, "activate", G_CALLBACK(on_restart), NULL);
 	gtk_menu_shell_append(GTK_MENU_SHELL(app->tray_menu), app->tray_restart);
 	gtk_menu_shell_append(GTK_MENU_SHELL(app->tray_menu), gtk_separator_menu_item_new());
 
-	item = gtk_menu_item_new_with_label("打开浏览器");
-	g_signal_connect(item, "activate", G_CALLBACK(on_browser), NULL);
-	gtk_menu_shell_append(GTK_MENU_SHELL(app->tray_menu), item);
+	app->tray_browser = gtk_menu_item_new_with_label(_("打开浏览器", "Open Browser"));
+	g_signal_connect(app->tray_browser, "activate", G_CALLBACK(on_browser), NULL);
+	gtk_menu_shell_append(GTK_MENU_SHELL(app->tray_menu), app->tray_browser);
 	gtk_menu_shell_append(GTK_MENU_SHELL(app->tray_menu), gtk_separator_menu_item_new());
 
-	item = gtk_menu_item_new_with_label("退出");
-	g_signal_connect(item, "activate", G_CALLBACK(on_quit), NULL);
-	gtk_menu_shell_append(GTK_MENU_SHELL(app->tray_menu), item);
+	app->tray_quit_and_stop = gtk_menu_item_new_with_label(_("退出并停止服务", "Quit & Stop Service"));
+	g_signal_connect(app->tray_quit_and_stop, "activate", G_CALLBACK(on_quit_and_stop), NULL);
+	gtk_menu_shell_append(GTK_MENU_SHELL(app->tray_menu), app->tray_quit_and_stop);
+
+	app->tray_quit = gtk_menu_item_new_with_label(_("仅退出", "Quit Only"));
+	g_signal_connect(app->tray_quit, "activate", G_CALLBACK(on_quit), NULL);
+	gtk_menu_shell_append(GTK_MENU_SHELL(app->tray_menu), app->tray_quit);
 
 	gtk_widget_show_all(app->tray_menu);
 
@@ -547,9 +621,9 @@ static void build_ui(void) {
 		"/usr/share/pixmaps");
 	app_indicator_set_status(app->indicator, APP_INDICATOR_STATUS_ACTIVE);
 	app_indicator_set_menu(app->indicator, GTK_MENU(app->tray_menu));
-	app_indicator_set_title(app->indicator, "Jellyfin 控制");
+	app_indicator_set_title(app->indicator, _("Jellyfin 控制", "Jellyfin Control"));
 
-	app->timer = g_timeout_add_seconds(3, timer_cb, NULL);
+	app->timer = g_timeout_add_seconds(5, timer_cb, NULL);
 	g_idle_add(idle_update, NULL);
 }
 
