@@ -17,6 +17,8 @@
 #define SUDO       "sudo"
 #define DEF_PORT   "8096"
 
+typedef enum { MODE_SYSTEMD, MODE_FLATPAK, MODE_SNAP } ModeType;
+
 typedef struct {
 	GtkWidget     *window;
 	GtkWidget     *status_label;
@@ -30,6 +32,16 @@ typedef struct {
 	GtkWidget     *tray_stop;
 	GtkWidget     *tray_restart;
 	guint          timer;
+	ModeType       mode_type;
+	gchar         *mode_id;
+	gboolean       native_found;
+	gboolean       flatpak_found;
+	gchar         *flatpak_id;
+	gboolean       snap_found;
+	gchar         *snap_id;
+	GtkWidget     *mode_combo;
+	GtkWidget     *vbox;
+	GtkWidget     *top_section;
 } App;
 
 static App *app = NULL;
@@ -43,35 +55,149 @@ static void run_cmd(const gchar *fmt, ...) {
 	g_free(cmd);
 }
 
-static gboolean update_label(void) {
-	gchar *out = NULL;
-	if (g_spawn_command_line_sync(SYSTEMCTL " is-active " SERVICE,
-	                              &out, NULL, NULL, NULL) && out) {
-		g_strstrip(out);
-		const gchar *text;
-		if (g_strcmp0(out, "active") == 0)
-			text = "● 运行中";
-		else if (g_strcmp0(out, "inactive") == 0 ||
-		         g_strcmp0(out, "failed") == 0)
-			text = "○ 已停止";
-		else
-			text = "? 未知";
-		gtk_label_set_text(GTK_LABEL(app->status_label), text);
-		gboolean running = (g_strcmp0(out, "active") == 0);
-		if (GTK_IS_WIDGET(app->btn_start))
-			gtk_widget_set_sensitive(app->btn_start, !running);
-		if (GTK_IS_WIDGET(app->btn_stop))
-			gtk_widget_set_sensitive(app->btn_stop, running);
-		if (GTK_IS_WIDGET(app->btn_restart))
-			gtk_widget_set_sensitive(app->btn_restart, running);
-		if (GTK_IS_WIDGET(app->tray_start))
-			gtk_widget_set_sensitive(app->tray_start, !running);
-		if (GTK_IS_WIDGET(app->tray_stop))
-			gtk_widget_set_sensitive(app->tray_stop, running);
-		if (GTK_IS_WIDGET(app->tray_restart))
-			gtk_widget_set_sensitive(app->tray_restart, running);
+static void disable_all_buttons(void) {
+	gtk_widget_set_sensitive(app->btn_start, FALSE);
+	gtk_widget_set_sensitive(app->btn_stop, FALSE);
+	gtk_widget_set_sensitive(app->btn_restart, FALSE);
+	gtk_widget_set_sensitive(app->tray_start, FALSE);
+	gtk_widget_set_sensitive(app->tray_stop, FALSE);
+	gtk_widget_set_sensitive(app->tray_restart, FALSE);
+}
+
+static void set_buttons_running(gboolean running) {
+	gtk_widget_set_sensitive(app->btn_start, !running);
+	gtk_widget_set_sensitive(app->btn_stop, running);
+	gtk_widget_set_sensitive(app->btn_restart, running);
+	gtk_widget_set_sensitive(app->tray_start, !running);
+	gtk_widget_set_sensitive(app->tray_stop, running);
+	gtk_widget_set_sensitive(app->tray_restart, running);
+}
+
+static void detect(void) {
+	g_free(app->flatpak_id);  app->flatpak_id = NULL;
+	g_free(app->snap_id);     app->snap_id = NULL;
+	app->native_found = FALSE;
+	app->flatpak_found = FALSE;
+	app->snap_found = FALSE;
+
+	gint status;
+	if (g_spawn_command_line_sync("which " SERVICE, NULL, NULL, &status, NULL) && status == 0)
+		app->native_found = TRUE;
+	if (!app->native_found) {
+		gchar *cmd = g_strdup_printf(SYSTEMCTL " list-unit-files %s.service", SERVICE);
+		gchar *out = NULL;
+		if (g_spawn_command_line_sync(cmd, &out, NULL, &status, NULL) && status == 0 && out)
+			app->native_found = (g_strstr_len(out, -1, SERVICE ".service") != NULL);
+		g_free(out);
+		g_free(cmd);
+	}
+
+	{
+		gchar *out = NULL;
+		if (g_spawn_command_line_sync("flatpak list --app --columns=application",
+		                              &out, NULL, &status, NULL) && status == 0 && out) {
+			gchar **lines = g_strsplit(out, "\n", -1);
+			for (int i = 0; lines[i]; i++) {
+				g_strstrip(lines[i]);
+				if (strlen(lines[i]) > 0 &&
+				    (g_strstr_len(lines[i], -1, "jellyfin") ||
+				     g_strstr_len(lines[i], -1, "Jellyfin"))) {
+					app->flatpak_found = TRUE;
+					app->flatpak_id = g_strdup(lines[i]);
+					break;
+				}
+			}
+			g_strfreev(lines);
+		}
 		g_free(out);
 	}
+
+	{
+		gchar *out = NULL;
+		if (g_spawn_command_line_sync("snap list", &out, NULL, &status, NULL) && status == 0 && out) {
+			gchar **lines = g_strsplit(out, "\n", -1);
+			for (int i = 0; lines[i]; i++) {
+				if (g_strstr_len(lines[i], -1, "jellyfin") ||
+				    g_strstr_len(lines[i], -1, "Jellyfin")) {
+					app->snap_found = TRUE;
+					char name[64] = {0};
+					sscanf(lines[i], "%63s", name);
+					app->snap_id = g_strdup(name);
+					break;
+				}
+			}
+			g_strfreev(lines);
+		}
+		g_free(out);
+	}
+
+	g_free(app->mode_id);
+	if (app->native_found) {
+		app->mode_type = MODE_SYSTEMD;
+		app->mode_id = g_strdup("systemd");
+	} else if (app->flatpak_found) {
+		app->mode_type = MODE_FLATPAK;
+		app->mode_id = g_strdup(app->flatpak_id);
+	} else if (app->snap_found) {
+		app->mode_type = MODE_SNAP;
+		app->mode_id = g_strdup(app->snap_id);
+	} else {
+		app->mode_type = MODE_SYSTEMD;
+		app->mode_id = NULL;
+	}
+}
+
+static gboolean update_label(void) {
+	if (app->mode_type == MODE_SYSTEMD && !app->native_found) {
+		gtk_label_set_text(GTK_LABEL(app->status_label), "未安装 Jellyfin");
+		disable_all_buttons();
+		return FALSE;
+	}
+
+	gboolean running = FALSE;
+
+	switch (app->mode_type) {
+	case MODE_SYSTEMD: {
+		gchar *out = NULL;
+		if (g_spawn_command_line_sync(SYSTEMCTL " is-active " SERVICE,
+		                              &out, NULL, NULL, NULL) && out) {
+			g_strstrip(out);
+			running = (g_strcmp0(out, "active") == 0);
+			g_free(out);
+		}
+		break;
+	}
+	case MODE_FLATPAK: {
+		gchar *out = NULL;
+		if (g_spawn_command_line_sync("flatpak ps --columns=application",
+		                              &out, NULL, NULL, NULL) && out) {
+			running = (g_strstr_len(out, -1, app->mode_id) != NULL);
+			g_free(out);
+		}
+		break;
+	}
+	case MODE_SNAP: {
+		gchar *out = NULL;
+		gchar *scmd = g_strdup_printf("snap services %s", app->mode_id);
+		if (g_spawn_command_line_sync(scmd, &out, NULL, NULL, NULL) && out) {
+			gchar **lines = g_strsplit(out, "\n", -1);
+			for (int i = 0; lines[i]; i++) {
+				if (g_strstr_len(lines[i], -1, app->mode_id)) {
+					running = (g_strstr_len(lines[i], -1, " active") != NULL);
+					break;
+				}
+			}
+			g_strfreev(lines);
+			g_free(out);
+		}
+		g_free(scmd);
+		break;
+	}
+	}
+
+	gtk_label_set_text(GTK_LABEL(app->status_label),
+	                   running ? "● 运行中" : "○ 已停止");
+	set_buttons_running(running);
 	return FALSE;
 }
 
@@ -87,18 +213,77 @@ static gboolean idle_update(gpointer data) {
 	return G_SOURCE_REMOVE;
 }
 
+static void on_mode_changed(GtkComboBox *combo, gpointer data) {
+	(void)combo; (void)data;
+	GtkTreeIter iter;
+	if (!gtk_combo_box_get_active_iter(GTK_COMBO_BOX(combo), &iter))
+		return;
+	gchar *text = NULL;
+	gtk_tree_model_get(gtk_combo_box_get_model(GTK_COMBO_BOX(combo)),
+	                   &iter, 0, &text, -1);
+	if (text == NULL) return;
+
+	if (g_strstr_len(text, -1, "Flatpak") && app->flatpak_id) {
+		app->mode_type = MODE_FLATPAK;
+		g_free(app->mode_id);
+		app->mode_id = g_strdup(app->flatpak_id);
+	} else if (g_strstr_len(text, -1, "Snap") && app->snap_id) {
+		app->mode_type = MODE_SNAP;
+		g_free(app->mode_id);
+		app->mode_id = g_strdup(app->snap_id);
+	} else {
+		app->mode_type = MODE_SYSTEMD;
+		g_free(app->mode_id);
+		app->mode_id = g_strdup("systemd");
+	}
+	g_free(text);
+	update_label();
+}
+
 static void on_start(void) {
-	run_cmd(SUDO " " SYSTEMCTL " start " SERVICE);
+	switch (app->mode_type) {
+	case MODE_SYSTEMD:
+		run_cmd(SUDO " " SYSTEMCTL " start " SERVICE);
+		break;
+	case MODE_FLATPAK:
+		run_cmd("flatpak run %s", app->mode_id);
+		break;
+	case MODE_SNAP:
+		run_cmd(SUDO " snap start %s", app->mode_id);
+		break;
+	}
 	g_timeout_add_seconds(1, timer_cb, NULL);
 }
 
 static void on_stop(void) {
-	run_cmd(SUDO " " SYSTEMCTL " stop " SERVICE);
+	switch (app->mode_type) {
+	case MODE_SYSTEMD:
+		run_cmd(SUDO " " SYSTEMCTL " stop " SERVICE);
+		break;
+	case MODE_FLATPAK:
+		run_cmd("flatpak kill %s", app->mode_id);
+		break;
+	case MODE_SNAP:
+		run_cmd(SUDO " snap stop %s", app->mode_id);
+		break;
+	}
 	g_timeout_add_seconds(1, timer_cb, NULL);
 }
 
 static void on_restart(void) {
-	run_cmd(SUDO " " SYSTEMCTL " restart " SERVICE);
+	switch (app->mode_type) {
+	case MODE_SYSTEMD:
+		run_cmd(SUDO " " SYSTEMCTL " restart " SERVICE);
+		break;
+	case MODE_FLATPAK:
+		run_cmd("flatpak kill %s", app->mode_id);
+		g_usleep(500000);
+		run_cmd("flatpak run %s", app->mode_id);
+		break;
+	case MODE_SNAP:
+		run_cmd(SUDO " snap restart %s", app->mode_id);
+		break;
+	}
 	g_timeout_add_seconds(1, timer_cb, NULL);
 }
 
@@ -131,23 +316,169 @@ static GtkWidget *make_button(const gchar *label, GCallback cb) {
 	return b;
 }
 
+static int count_installed(void) {
+	int n = 0;
+	if (app->native_found) n++;
+	if (app->flatpak_found) n++;
+	if (app->snap_found) n++;
+	return n;
+}
+
+static void on_refresh(void) {
+	detect();
+	gboolean installed = (count_installed() > 0);
+
+	if (app->top_section) {
+		gtk_widget_destroy(app->top_section);
+		app->top_section = NULL;
+		app->mode_combo = NULL;
+		app->status_label = NULL;
+	}
+
+	g_source_remove(app->timer);
+	app->top_section = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+
+	if (installed) {
+		if (count_installed() > 1) {
+			GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
+			gtk_box_pack_start(GTK_BOX(app->top_section), hbox, FALSE, FALSE, 0);
+			gtk_box_pack_start(GTK_BOX(hbox),
+			                   gtk_label_new("版本:"), FALSE, FALSE, 0);
+
+			app->mode_combo = gtk_combo_box_text_new();
+			if (app->native_found)
+				gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(app->mode_combo),
+				                          NULL, "系统安装 (systemd)");
+			if (app->flatpak_found) {
+				gchar *lbl = g_strdup_printf("Flatpak (%s)", app->flatpak_id);
+				gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(app->mode_combo),
+				                          NULL, lbl);
+				g_free(lbl);
+			}
+			if (app->snap_found) {
+				gchar *lbl = g_strdup_printf("Snap (%s)", app->snap_id);
+				gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(app->mode_combo),
+				                          NULL, lbl);
+				g_free(lbl);
+			}
+			gtk_combo_box_set_active(GTK_COMBO_BOX(app->mode_combo), 0);
+			g_signal_connect(app->mode_combo, "changed",
+			                 G_CALLBACK(on_mode_changed), NULL);
+			gtk_box_pack_start(GTK_BOX(hbox), app->mode_combo, FALSE, FALSE, 0);
+		} else {
+			gchar *mode_label;
+			if (app->native_found)
+				mode_label = g_strdup("版本: 系统安装 (systemd)");
+			else if (app->flatpak_found)
+				mode_label = g_strdup_printf("版本: Flatpak (%s)", app->flatpak_id);
+			else
+				mode_label = g_strdup_printf("版本: Snap (%s)", app->snap_id);
+			GtkWidget *mlabel = gtk_label_new(mode_label);
+			gtk_box_pack_start(GTK_BOX(app->top_section), mlabel, FALSE, FALSE, 0);
+			g_free(mode_label);
+		}
+
+		app->status_label = gtk_label_new("检查中...");
+		gtk_label_set_markup(GTK_LABEL(app->status_label), "<big>检查中...</big>");
+		gtk_box_pack_start(GTK_BOX(app->top_section), app->status_label, FALSE, FALSE, 0);
+
+		disable_all_buttons();
+		app->timer = g_timeout_add_seconds(3, timer_cb, NULL);
+		g_idle_add(idle_update, NULL);
+	} else {
+		GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+		gtk_box_pack_start(GTK_BOX(app->top_section), hbox, FALSE, FALSE, 0);
+
+		app->status_label = gtk_label_new("未检测到 Jellyfin");
+		gtk_label_set_markup(GTK_LABEL(app->status_label), "<big>未检测到 Jellyfin</big>");
+		gtk_box_pack_start(GTK_BOX(hbox), app->status_label, FALSE, FALSE, 0);
+
+		GtkWidget *refresh_btn = gtk_button_new_with_label("刷新");
+		g_signal_connect(refresh_btn, "clicked", G_CALLBACK(on_refresh), NULL);
+		gtk_box_pack_start(GTK_BOX(hbox), refresh_btn, FALSE, FALSE, 0);
+	}
+
+	gtk_box_pack_start(GTK_BOX(app->vbox), app->top_section, FALSE, FALSE, 0);
+	gtk_widget_show_all(app->top_section);
+
+	if (!installed)
+		disable_all_buttons();
+}
+
 static void build_ui(void) {
+	gboolean installed = (count_installed() > 0);
+
 	app->window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-	gtk_window_set_title(GTK_WINDOW(app->window), "Jellyfin 控制");
-	gtk_window_set_resizable(GTK_WINDOW(app->window), FALSE);
+	gtk_window_set_default_size(GTK_WINDOW(app->window), 340, -1);
 	gtk_container_set_border_width(GTK_CONTAINER(app->window), 16);
 	g_signal_connect(app->window, "delete-event", G_CALLBACK(on_delete), NULL);
 	g_signal_connect(app->window, "destroy", G_CALLBACK(gtk_main_quit), NULL);
 
-	GtkWidget *vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
-	gtk_container_add(GTK_CONTAINER(app->window), vbox);
+	app->vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+	gtk_container_add(GTK_CONTAINER(app->window), app->vbox);
 
-	app->status_label = gtk_label_new("检查中...");
-	gtk_label_set_markup(GTK_LABEL(app->status_label), "<big>检查中...</big>");
-	gtk_box_pack_start(GTK_BOX(vbox), app->status_label, FALSE, FALSE, 0);
+	app->top_section = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+
+	if (installed) {
+		if (count_installed() > 1) {
+			GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
+			gtk_box_pack_start(GTK_BOX(app->top_section), hbox, FALSE, FALSE, 0);
+			gtk_box_pack_start(GTK_BOX(hbox),
+			                   gtk_label_new("版本:"), FALSE, FALSE, 0);
+
+			app->mode_combo = gtk_combo_box_text_new();
+			if (app->native_found)
+				gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(app->mode_combo),
+				                          NULL, "系统安装 (systemd)");
+			if (app->flatpak_found) {
+				gchar *lbl = g_strdup_printf("Flatpak (%s)", app->flatpak_id);
+				gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(app->mode_combo),
+				                          NULL, lbl);
+				g_free(lbl);
+			}
+			if (app->snap_found) {
+				gchar *lbl = g_strdup_printf("Snap (%s)", app->snap_id);
+				gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(app->mode_combo),
+				                          NULL, lbl);
+				g_free(lbl);
+			}
+			gtk_combo_box_set_active(GTK_COMBO_BOX(app->mode_combo), 0);
+			g_signal_connect(app->mode_combo, "changed",
+			                 G_CALLBACK(on_mode_changed), NULL);
+			gtk_box_pack_start(GTK_BOX(hbox), app->mode_combo, FALSE, FALSE, 0);
+		} else {
+			gchar *mode_label;
+			if (app->native_found)
+				mode_label = g_strdup("版本: 系统安装 (systemd)");
+			else if (app->flatpak_found)
+				mode_label = g_strdup_printf("版本: Flatpak (%s)", app->flatpak_id);
+			else
+				mode_label = g_strdup_printf("版本: Snap (%s)", app->snap_id);
+			GtkWidget *mlabel = gtk_label_new(mode_label);
+			gtk_box_pack_start(GTK_BOX(app->top_section), mlabel, FALSE, FALSE, 0);
+			g_free(mode_label);
+		}
+
+		app->status_label = gtk_label_new("检查中...");
+		gtk_label_set_markup(GTK_LABEL(app->status_label), "<big>检查中...</big>");
+		gtk_box_pack_start(GTK_BOX(app->top_section), app->status_label, FALSE, FALSE, 0);
+	} else {
+		GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+		gtk_box_pack_start(GTK_BOX(app->top_section), hbox, FALSE, FALSE, 0);
+
+		app->status_label = gtk_label_new("未检测到 Jellyfin");
+		gtk_label_set_markup(GTK_LABEL(app->status_label), "<big>未检测到 Jellyfin</big>");
+		gtk_box_pack_start(GTK_BOX(hbox), app->status_label, FALSE, FALSE, 0);
+
+		GtkWidget *refresh_btn = gtk_button_new_with_label("刷新");
+		g_signal_connect(refresh_btn, "clicked", G_CALLBACK(on_refresh), NULL);
+		gtk_box_pack_start(GTK_BOX(hbox), refresh_btn, FALSE, FALSE, 0);
+	}
+
+	gtk_box_pack_start(GTK_BOX(app->vbox), app->top_section, FALSE, FALSE, 0);
 
 	GtkWidget *hbtn = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
-	gtk_box_pack_start(GTK_BOX(vbox), hbtn, FALSE, FALSE, 0);
+	gtk_box_pack_start(GTK_BOX(app->vbox), hbtn, FALSE, FALSE, 0);
 
 	app->btn_start = make_button("启动", G_CALLBACK(on_start));
 	gtk_box_pack_start(GTK_BOX(hbtn), app->btn_start, FALSE, FALSE, 0);
@@ -157,13 +488,13 @@ static void build_ui(void) {
 	gtk_box_pack_start(GTK_BOX(hbtn), app->btn_restart, FALSE, FALSE, 0);
 
 	GtkWidget *hquit = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
-	gtk_box_pack_start(GTK_BOX(vbox), hquit, FALSE, FALSE, 0);
+	gtk_box_pack_start(GTK_BOX(app->vbox), hquit, FALSE, FALSE, 0);
 	gtk_box_pack_start(GTK_BOX(hquit),
 	                   make_button("退出", G_CALLBACK(on_quit)),
 	                   FALSE, FALSE, 0);
 
 	GtkWidget *hport = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
-	gtk_box_pack_start(GTK_BOX(vbox), hport, FALSE, FALSE, 0);
+	gtk_box_pack_start(GTK_BOX(app->vbox), hport, FALSE, FALSE, 0);
 
 	GtkWidget *port_label = gtk_label_new("端口:");
 	gtk_box_pack_start(GTK_BOX(hport), port_label, FALSE, FALSE, 0);
@@ -239,7 +570,7 @@ int main(int argc, char *argv[]) {
 		char buf[32] = {0};
 		int rfd = open(LOCK_FILE, O_RDONLY);
 		if (rfd >= 0) {
-			read(rfd, buf, sizeof(buf) - 1);
+			if (read(rfd, buf, sizeof(buf) - 1) < 0) {} /* ignore */
 			close(rfd);
 			pid_t pid = atoi(buf);
 			if (pid > 0) kill(pid, SIGUSR1);
@@ -249,8 +580,8 @@ int main(int argc, char *argv[]) {
 	}
 	char pid_buf[32];
 	int len = snprintf(pid_buf, sizeof(pid_buf), "%d\n", getpid());
-	ftruncate(fd, 0);
-	write(fd, pid_buf, len);
+	if (ftruncate(fd, 0) < 0) {} /* ignore */
+	if (write(fd, pid_buf, len) < 0) {} /* ignore */
 
 	gtk_init(&argc, &argv);
 	g_unix_signal_add(SIGUSR1, on_sigusr1, NULL);
@@ -259,11 +590,15 @@ int main(int argc, char *argv[]) {
 	memset(&a, 0, sizeof(a));
 	app = &a;
 
+	detect();
 	build_ui();
 	gtk_widget_show_all(app->window);
 	gtk_main();
 
 	g_source_remove(app->timer);
+	g_free(a.mode_id);
+	g_free(a.flatpak_id);
+	g_free(a.snap_id);
 	close(fd);
 	unlink(LOCK_FILE);
 	return 0;

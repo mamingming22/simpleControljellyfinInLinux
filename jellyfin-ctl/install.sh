@@ -3,6 +3,8 @@ set -e
 SELF="$(readlink -f "$0")"
 DIR="$(dirname "$SELF")"
 
+VERSION="1.0"
+
 error() { echo -e "\033[31m错误: $*\033[0m" >&2; exit 1; }
 info()  { echo -e "\033[36m=> $*\033[0m"; }
 
@@ -25,22 +27,33 @@ if [ "${1:-}" = "-u" ] || [ "${1:-}" = "--uninstall" ]; then
 	uninstall
 fi
 
-info "正在编译安装 jellyfin-ctl..."
+info "正在编译安装 jellyfin-ctl v${VERSION}..."
 
-if command -v dnf &>/dev/null; then
-	info "安装构建依赖 (dnf)..."
-	dnf install -y gcc pkgconfig gtk3-devel make
-elif command -v apt &>/dev/null; then
-	info "安装构建依赖 (apt)..."
-	apt install -y gcc pkgconf libgtk-3-dev libayatana-appindicator3-dev make
-elif command -v pacman &>/dev/null; then
-	info "安装构建依赖 (pacman)..."
-	pacman -S --noconfirm gcc pkgconf gtk3 make
-elif command -v zypper &>/dev/null; then
-	info "安装构建依赖 (zypper)..."
-	zypper install -y gcc pkgconf gtk3-devel make
+# 杀掉旧进程，否则锁文件会阻止新二进制启动
+if pkill jellyfin-ctl 2>/dev/null; then
+	info "已终止旧进程"
+	sleep 0.5
+fi
+rm -f /tmp/jellyfin-ctl.lock
+
+if ! command -v gcc &>/dev/null || ! pkg-config --exists gtk+-3.0 2>/dev/null; then
+	if command -v dnf &>/dev/null; then
+		info "安装构建依赖 (dnf)..."
+		dnf install -y gcc pkgconfig gtk3-devel libayatana-appindicator-gtk3-devel make
+	elif command -v apt &>/dev/null; then
+		info "安装构建依赖 (apt)..."
+		apt install -y gcc pkgconf libgtk-3-dev libayatana-appindicator3-dev make
+	elif command -v pacman &>/dev/null; then
+		info "安装构建依赖 (pacman)..."
+		pacman -S --noconfirm gcc pkgconf gtk3 libayatana-appindicator make
+	elif command -v zypper &>/dev/null; then
+		info "安装构建依赖 (zypper)..."
+		zypper install -y gcc pkgconf gtk3-devel libayatana-appindicator3-devel make
+	else
+		error "未识别的包管理器，请手动安装: gcc + pkgconf + gtk3-dev + make"
+	fi
 else
-	error "未识别的包管理器，请手动安装: gcc + pkgconf + gtk3-dev + make"
+	info "构建依赖已满足，跳过安装"
 fi
 
 cd "$DIR/src"
@@ -48,7 +61,7 @@ make clean 2>/dev/null || true
 make
 
 info "安装文件..."
-install -Dm755 jellyfin-ctl /usr/local/bin/jellyfin-ctl
+install -Dm755 jellyfin-ctl "/usr/local/bin/jellyfin-ctl"
 install -Dm644 jellyfin-ctl.desktop /usr/share/applications/jellyfin-ctl.desktop
 install -Dm644 jellyfin-ctl.svg /usr/share/pixmaps/jellyfin-ctl.svg
 install -Dm644 jellyfin-ctl.png /usr/share/pixmaps/jellyfin-ctl.png
@@ -65,7 +78,7 @@ fi
 
 echo ""
 echo "========================"
-echo "  安装完成！"
+echo "  安装完成！v${VERSION}"
 echo "========================"
 echo ""
 echo "启动命令: jellyfin-ctl"
