@@ -3,7 +3,7 @@ set -e
 SELF="$(readlink -f "$0")"
 DIR="$(dirname "$SELF")"
 
-VERSION="1.1"
+VERSION="1.2"
 
 error() { echo -e "\033[31m错误: $*\033[0m" >&2; exit 1; }
 info()  { echo -e "\033[36m=> $*\033[0m"; }

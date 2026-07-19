@@ -1,6 +1,6 @@
 # jellyfin-ctl
 
-Jellyfin 服务控制面板 — 系统托盘小工具，支持启动、停止、重启服务，以及打开浏览器访问。
+Jellyfin 服务控制面板 — 系统托盘小工具，支持启动、停止、重启服务、开关开机自启，以及打开浏览器访问。
 
 自动检测 systemd / Flatpak / Snap 三种安装格式，多格式共存时可通过下拉框切换。
 
@@ -31,6 +31,7 @@ jellyfin-ctl
 
 - **托盘图标** — 左键/右键弹出菜单
 - **启动/停止/重启** — 根据服务状态自动禁用
+- **开机自启** — 一键启用/禁用（仅 systemd 模式）
 - **关闭窗口** — 隐藏到托盘，不退出
 - **退出** — 窗口底部按钮或托盘菜单，完全退出
 - **端口** — 自定义后点击「打开浏览器」
@@ -42,7 +43,7 @@ jellyfin-ctl
 
 | 格式 | 检测方式 | 控制命令 |
 |------|----------|----------|
-| systemd | `which jellyfin` / `systemctl list-unit-files` | `sudo systemctl start/stop/restart` |
+| systemd | `which jellyfin` / `systemctl list-unit-files` | `sudo systemctl start/stop/restart/enable/disable` |
 | Flatpak | `flatpak list --app` | `flatpak run / kill` |
 | Snap | `snap list` | `sudo snap start/stop/restart` |
 
@@ -54,7 +55,7 @@ jellyfin-ctl
 
 ## 权限
 
-- **systemd**: 需要免密 sudo（install.sh 自动安装 sudoers 规则）
+- **systemd**: 需要免密 sudo（install.sh 自动安装 sudoers 规则，包含 `start/stop/restart/enable/disable/is-enabled`）
 - **Flatpak**: 用户级运行，无需额外权限
 - **Snap**: 需要 sudo
 

@@ -56,6 +56,8 @@ typedef struct {
 	GtkWidget     *btn_quit_and_stop;
 	GtkWidget     *btn_quit;
 	GtkWidget     *btn_browser;
+	GtkWidget     *btn_autostart;
+	GtkWidget     *tray_autostart;
 } App;
 
 static App *app = NULL;
@@ -76,6 +78,8 @@ static void disable_all_buttons(void) {
 	gtk_widget_set_sensitive(app->tray_start, FALSE);
 	gtk_widget_set_sensitive(app->tray_stop, FALSE);
 	gtk_widget_set_sensitive(app->tray_restart, FALSE);
+	gtk_widget_set_sensitive(app->btn_autostart, FALSE);
+	gtk_widget_set_sensitive(app->tray_autostart, FALSE);
 }
 
 static void set_buttons_running(gboolean running) {
@@ -85,6 +89,63 @@ static void set_buttons_running(gboolean running) {
 	gtk_widget_set_sensitive(app->tray_start, !running);
 	gtk_widget_set_sensitive(app->tray_stop, running);
 	gtk_widget_set_sensitive(app->tray_restart, running);
+}
+
+static gboolean is_autostart_enabled(void) {
+	switch (app->mode_type) {
+	case MODE_SYSTEMD: {
+		gchar *out = NULL;
+		if (g_spawn_command_line_sync(SYSTEMCTL " is-enabled " SERVICE,
+		                              &out, NULL, NULL, NULL) && out) {
+			g_strstrip(out);
+			gboolean en = (g_strcmp0(out, "enabled") == 0);
+			g_free(out);
+			return en;
+		}
+		return FALSE;
+	}
+	case MODE_FLATPAK:
+	case MODE_SNAP:
+		return FALSE;
+	}
+	return FALSE;
+}
+
+static gboolean autostart_supported(void) {
+	return (app->mode_type == MODE_SYSTEMD);
+}
+
+static void update_autostart_label(void) {
+	if (!autostart_supported()) {
+		gtk_widget_set_sensitive(app->btn_autostart, FALSE);
+		gtk_button_set_label(GTK_BUTTON(app->btn_autostart),
+		                     _("开机自启: -", "Autostart: -"));
+		gtk_widget_set_sensitive(app->tray_autostart, FALSE);
+		gtk_menu_item_set_label(GTK_MENU_ITEM(app->tray_autostart),
+		                        _("开机自启: -", "Autostart: -"));
+		return;
+	}
+	gboolean en = is_autostart_enabled();
+	gtk_widget_set_sensitive(app->btn_autostart, TRUE);
+	gtk_button_set_label(GTK_BUTTON(app->btn_autostart),
+	                     en ? _("禁用开机自启", "Disable Autostart")
+	                        : _("启用开机自启", "Enable Autostart"));
+	gtk_widget_set_sensitive(app->tray_autostart, TRUE);
+	gtk_menu_item_set_label(GTK_MENU_ITEM(app->tray_autostart),
+	                        en ? _("禁用开机自启", "Disable Autostart")
+	                           : _("启用开机自启", "Enable Autostart"));
+}
+
+static gboolean idle_update(gpointer data);
+
+static void on_autostart_toggle(void) {
+	if (!autostart_supported()) return;
+	gboolean en = is_autostart_enabled();
+	if (en)
+		run_cmd(SUDO " " SYSTEMCTL " disable " SERVICE);
+	else
+		run_cmd(SUDO " " SYSTEMCTL " enable " SERVICE);
+	g_timeout_add_seconds(1, idle_update, NULL);
 }
 
 static void detect(void) {
@@ -212,6 +273,7 @@ static gboolean update_label(void) {
 	gtk_label_set_text(GTK_LABEL(app->status_label),
 	                   running ? _("● 运行中", "● Running") : _("○ 已停止", "○ Stopped"));
 	set_buttons_running(running);
+	update_autostart_label();
 	return FALSE;
 }
 
@@ -580,6 +642,12 @@ static void build_ui(void) {
 	g_signal_connect(app->lang_btn, "clicked", G_CALLBACK(on_lang_changed), NULL);
 	gtk_box_pack_start(GTK_BOX(hlang), app->lang_btn, FALSE, FALSE, 0);
 
+	GtkWidget *haustart = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
+	gtk_box_pack_start(GTK_BOX(app->vbox), haustart, FALSE, FALSE, 0);
+	app->btn_autostart = gtk_button_new_with_label(_("启用开机自启", "Enable Autostart"));
+	g_signal_connect(app->btn_autostart, "clicked", G_CALLBACK(on_autostart_toggle), NULL);
+	gtk_box_pack_start(GTK_BOX(haustart), app->btn_autostart, FALSE, FALSE, 0);
+
 	/* tray menu */
 	app->tray_menu = gtk_menu_new();
 
@@ -597,6 +665,10 @@ static void build_ui(void) {
 	app->tray_restart = gtk_menu_item_new_with_label(_("重启", "Restart"));
 	g_signal_connect(app->tray_restart, "activate", G_CALLBACK(on_restart), NULL);
 	gtk_menu_shell_append(GTK_MENU_SHELL(app->tray_menu), app->tray_restart);
+
+	app->tray_autostart = gtk_menu_item_new_with_label(_("启用开机自启", "Enable Autostart"));
+	g_signal_connect(app->tray_autostart, "activate", G_CALLBACK(on_autostart_toggle), NULL);
+	gtk_menu_shell_append(GTK_MENU_SHELL(app->tray_menu), app->tray_autostart);
 	gtk_menu_shell_append(GTK_MENU_SHELL(app->tray_menu), gtk_separator_menu_item_new());
 
 	app->tray_browser = gtk_menu_item_new_with_label(_("打开浏览器", "Open Browser"));

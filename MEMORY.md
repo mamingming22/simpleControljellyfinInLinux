@@ -2,7 +2,7 @@
 
 ## 项目概述
 
-- **版本**: 1.1
+- **版本**: 1.2
 - Jellyfin 系统托盘控制面板 — 用 C + GTK3 编写，提供启动/停止/重启服务和打开浏览器的 GUI。
 
 ## 技术栈
@@ -67,6 +67,12 @@ jellyfin-ctl/
 - `on_delete` + `gtk_widget_hide()` → 窗口关闭隐藏到托盘
 - 窗口底部「退出」按钮 / 托盘菜单「退出」 → `gtk_main_quit()` 完全退出
 
+### 开机自启开关
+
+- systemd 模式独有，通过 `systemctl is-enabled/enable/disable` 实现
+- 窗口内按钮 + 托盘菜单，实时刷新状态
+- Flatpak/Snap 模式下按钮显示 "Autostart: -" 并禁用
+
 ### 中/英文切换
 
 - `is_zh` 全局布尔变量，默认 `TRUE`（中文）
@@ -91,7 +97,7 @@ libgtk-3-0t64, libayatana-appindicator3-1, sudo, systemd
 
 - **systemd**: sudoers 文件 `/etc/sudoers.d/jellyfin-ctl`（`sudo systemctl start/stop/restart jellyfin`）
   ```
-  %sudo ALL=(ALL) NOPASSWD: /usr/bin/systemctl start jellyfin, /usr/bin/systemctl stop jellyfin, /usr/bin/systemctl restart jellyfin
+  %sudo ALL=(ALL) NOPASSWD: /usr/bin/systemctl start jellyfin, /usr/bin/systemctl stop jellyfin, /usr/bin/systemctl restart jellyfin, /usr/bin/systemctl enable jellyfin, /usr/bin/systemctl disable jellyfin, /usr/bin/systemctl is-enabled jellyfin
   ```
 - **Flatpak**: 用户级运行，无需 sudo
 - **Snap**: 需要 sudo（`sudo snap start/stop/restart <name>`）
@@ -120,3 +126,4 @@ libgtk-3-0t64, libayatana-appindicator3-1, sudo, systemd
 11. install.sh: 跳过已安装的依赖、安装时终止旧进程、版本号
 12. 中/英双语切换 — 窗口内按钮手动切换语言，即时更新所有 UI 文本
 13. v1.1 — 中/英双语切换正式版，修复未检测状态 markup 翻译遗漏，在 Pop!_OS (COSMIC) 下完成测试验证
+14. v1.2 — 开机自启开关（`systemctl enable/disable`），支持中/英双语、托盘菜单，仅 systemd 模式可用，其他模式显示 "Autostart: -"
